@@ -1,0 +1,9 @@
+build/
+.gradle/
+*.class
+*.log
+.idea/
+.vscode/
+*.iml
+screenshots/*.png
+!screenshots/.gitkeep

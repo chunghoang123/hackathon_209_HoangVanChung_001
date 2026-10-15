@@ -1,0 +1,9 @@
+build/
+.gradle/
+.git/
+.github/
+*.md
+!README.md
+screenshots/
+student.env
+*.png

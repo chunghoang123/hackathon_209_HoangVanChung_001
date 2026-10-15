@@ -1,0 +1,121 @@
+
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  APP_IMAGE: ghcr.io/${{ github.repository_owner }}/devops-final-app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Kiem tra student.env khong de trong
+        run: |
+          fail=0
+          for key in STUDENT_NAME APP_PORT COMPOSE_PROJECT_NAME MYSQL_DATABASE MYSQL_USER MYSQL_PASSWORD; do
+            if ! grep -q "^${key}=..*" student.env; then
+              echo "::error::${key} dang de trong trong student.env - pipeline FAIL"
+              fail=1
+            fi
+          done
+          if [ "$fail" -eq 0 ]; then
+            echo "student.env hop le - tiep tuc build"
+          fi
+          exit $fail
+
+      # TODO 1 - build: compose build + up tren runner (doc student.env), cho service san sang
+      - name: "TODO1: compose build + up tren runner"
+        run: docker compose --env-file student.env up -d --build
+
+      - name: "TODO1: cho cac service san sang"
+        run: |
+          APP_PORT=$(grep '^APP_PORT=' student.env | cut -d= -f2)
+          echo "Kiem tra app tai http://localhost:${APP_PORT}/api/labs"
+          for i in $(seq 1 36); do
+            if curl -fsS "http://localhost:${APP_PORT}/api/labs" > /dev/null 2>&1; then
+              echo "He thong san sang (lan kiem tra ${i})"
+              curl -fsS "http://localhost:${APP_PORT}/api/labs"
+              exit 0
+            fi
+            echo "cho service... lan ${i}"
+            sleep 5
+          done
+          echo "::error::App khong len sau 180s"
+          docker compose --env-file student.env ps
+          docker compose --env-file student.env logs --tail 100
+          exit 1
+
+      - name: In log trang thai
+        if: always()
+        run: docker compose --env-file student.env ps
+
+      - name: Don dep runner
+        if: always()
+        run: docker compose --env-file student.env down
+
+  deploy:
+    # TODO 4 - needs: job deploy chi chay khi job build thanh cong
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # TODO 2 - login GHCR bang github.actor va secrets.GITHUB_TOKEN
+      - name: "TODO2: dang nhap GHCR"
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # TODO 3 - push image voi 2 tag: commit SHA va latest
+      - name: "TODO3: build + push image (SHA va latest)"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          tags: |
+            ${{ env.APP_IMAGE }}:${{ github.sha }}
+            ${{ env.APP_IMAGE }}:latest
+
+      - name: In log image da push
+        run: |
+          echo "Da push:"
+          echo "  - ${{ env.APP_IMAGE }}:${{ github.sha }}"
+          echo "  - ${{ env.APP_IMAGE }}:latest"
+
+      # TODO 5 - SSH ket noi bang secrets SERVER_HOST, SERVER_USER, SERVER_SSH_KEY
+      # TODO 6 - tren server: pull image moi, up -d khong build
+      - name: "TODO5/6: deploy len server qua SSH"
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd ~/app
+            docker login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+            export APP_IMAGE=${{ env.APP_IMAGE }}
+            export APP_TAG=${{ github.sha }}
+            docker compose --env-file student.env pull app || true
+            docker compose --env-file student.env up -d --no-build
+            docker compose --env-file student.env ps
+
+      - name: Don dep
+        if: always()
+        run: echo "Pipeline ket thuc luc $(date -u)"
